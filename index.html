@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Daily Market Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --card: #1a1d27;
+      --border: #2a2d3a;
+      --text: #e2e8f0;
+      --sub: #94a3b8;
+      --green: #22c55e;
+      --red: #ef4444;
+      --blue: #3b82f6;
+      --yellow: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      padding: 24px 16px;
+    }
+    header {
+      max-width: 1200px;
+      margin: 0 auto 28px;
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    header h1 { font-size: 1.5rem; font-weight: 700; }
+    header span { font-size: 0.85rem; color: var(--sub); }
+    .grid {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: transform 0.15s;
+    }
+    .card:hover { transform: translateY(-2px); }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .card-label { font-size: 0.78rem; color: var(--sub); text-transform: uppercase; letter-spacing: 0.05em; }
+    .card-icon { font-size: 1.3rem; }
+    .card-price {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1;
+    }
+    .card-change {
+      font-size: 0.9rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .up   { color: var(--green); }
+    .down { color: var(--red); }
+    .flat { color: var(--sub); }
+    .card-chart { margin-top: 8px; height: 60px; display: block; }
+    .card-chart-wrap { height: 60px; overflow: hidden; margin-top: 8px; }
+    .chart-wrap {
+      max-width: 1200px;
+      margin: 24px auto 0;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+    }
+    .chart-wrap h2 { font-size: 0.9rem; color: var(--sub); margin-bottom: 16px; }
+    .chart-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .tab {
+      padding: 5px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--sub);
+      font-size: 0.82rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .tab.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+    #main-chart-container { height: 260px; overflow: hidden; }
+    footer {
+      max-width: 1200px;
+      margin: 24px auto 0;
+      text-align: right;
+      font-size: 0.75rem;
+      color: var(--sub);
+    }
+    .loading { color: var(--sub); font-size: 0.9rem; }
+    .error-msg { color: var(--red); font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Market Dashboard</h1>
+    <span id="updated-at">데이터 로딩 중...</span>
+  </header>
+
+  <div class="grid" id="cards"></div>
+
+  <div class="chart-wrap">
+    <h2>1년 추이</h2>
+    <div class="chart-tabs" id="tabs"></div>
+    <div id="main-chart-container">
+      <canvas id="main-chart"></canvas>
+    </div>
+  </div>
+
+  <footer>
+    데이터 출처: Yahoo Finance, CoinGecko &nbsp;|&nbsp; 매일 자동 갱신
+  </footer>
+
+  <script>
+    const ICONS = {
+      KOSPI: '🇰🇷', KOSDAQ: '🇰🇷', 'S&P500': '🇺🇸', Nasdaq: '🇺🇸',
+      'USD/KRW': '💵', Bitcoin: '₿'
+    };
+
+    const COLORS = {
+      KOSPI: '#3b82f6', KOSDAQ: '#8b5cf6', 'S&P500': '#f59e0b',
+      Nasdaq: '#06b6d4', 'USD/KRW': '#22c55e', Bitcoin: '#f97316'
+    };
+
+    let chartInstance = null;
+    let allData = null;
+
+    function fmt(n, decimals = 2) {
+      if (n == null) return '-';
+      return n.toLocaleString('ko-KR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    }
+
+    function changeClass(v) {
+      if (v > 0) return 'up';
+      if (v < 0) return 'down';
+      return 'flat';
+    }
+
+    function arrow(v) {
+      if (v > 0) return '▲';
+      if (v < 0) return '▼';
+      return '—';
+    }
+
+    function priceStr(name, price) {
+      if (name === 'Bitcoin') return '$' + fmt(price, 0);
+      if (name === 'USD/KRW') return fmt(price, 2) + '원';
+      return fmt(price, 2);
+    }
+
+    function buildCard(name, info) {
+      const chg = info.change_pct;
+      const cls = changeClass(chg);
+      return `
+        <div class="card" data-name="${name}">
+          <div class="card-header">
+            <span class="card-label">${name}</span>
+            <span class="card-icon">${ICONS[name] || '📈'}</span>
+          </div>
+          <div class="card-price">${priceStr(name, info.price)}</div>
+          <div class="card-change ${cls}">
+            ${arrow(chg)} ${Math.abs(chg).toFixed(2)}%
+            <span style="font-weight:400;color:var(--sub);margin-left:4px;">(${chg >= 0 ? '+' : ''}${fmt(info.change_abs, name === 'Bitcoin' ? 0 : 2)})</span>
+          </div>
+          <div class="card-chart-wrap">
+            <canvas class="card-chart" id="spark-${name.replace(/[^a-z0-9]/gi,'_')}"></canvas>
+          </div>
+        </div>`;
+    }
+
+    function drawSparkline(name, history) {
+      const id = 'spark-' + name.replace(/[^a-z0-9]/gi, '_');
+      const canvas = document.getElementById(id);
+      if (!canvas || !history || history.length < 2) return;
+      const prices = history.map(h => h[1]);
+      const color = COLORS[name] || '#3b82f6';
+      canvas.width  = canvas.parentElement.offsetWidth  || 240;
+      canvas.height = 60;
+      new Chart(canvas, {
+        type: 'line',
+        data: {
+          labels: history.map(h => h[0]),
+          datasets: [{ data: prices, borderColor: color, borderWidth: 2,
+            pointRadius: 0, tension: 0.4,
+            fill: true,
+            backgroundColor: color + '22' }]
+        },
+        options: {
+          responsive: false,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          scales: { x: { display: false }, y: { display: false } },
+          animation: false
+        }
+      });
+    }
+
+    function drawMainChart(name) {
+      const info = allData.markets[name];
+      if (!info || !info.history) return;
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.name === name));
+      const labels = info.history.map(h => h[0]);
+      const prices = info.history.map(h => h[1]);
+      const color = COLORS[name] || '#3b82f6';
+      if (chartInstance) chartInstance.destroy();
+      chartInstance = new Chart(document.getElementById('main-chart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: name,
+            data: prices,
+            borderColor: color,
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.4,
+            fill: true,
+            backgroundColor: color + '18'
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              mode: 'index', intersect: false,
+              callbacks: {
+                label: ctx => ' ' + priceStr(name, ctx.parsed.y)
+              }
+            }
+          },
+          scales: {
+            x: {
+              ticks: { color: '#64748b', maxTicksLimit: 8, font: { size: 11 } },
+              grid: { color: '#1e2231' }
+            },
+            y: {
+              position: 'right',
+              ticks: { color: '#64748b', font: { size: 11 },
+                callback: v => priceStr(name, v)
+              },
+              grid: { color: '#1e2231' }
+            }
+          }
+        }
+      });
+    }
+
+    async function init() {
+      try {
+        const res = await fetch('data.json?v=' + Date.now());
+        if (!res.ok) throw new Error('data.json not found');
+        allData = await res.json();
+
+        document.getElementById('updated-at').textContent = '업데이트: ' + allData.updated_at;
+
+        const cardsEl = document.getElementById('cards');
+        const tabsEl = document.getElementById('tabs');
+
+        let firstTab = null;
+        for (const [name, info] of Object.entries(allData.markets)) {
+          cardsEl.innerHTML += buildCard(name, info);
+          const btn = document.createElement('button');
+          btn.className = 'tab';
+          btn.dataset.name = name;
+          btn.textContent = name;
+          btn.onclick = () => drawMainChart(name);
+          tabsEl.appendChild(btn);
+          if (!firstTab) firstTab = name;
+        }
+
+        for (const [name, info] of Object.entries(allData.markets)) {
+          drawSparkline(name, info.history);
+        }
+        if (firstTab) drawMainChart(firstTab);
+
+      } catch (e) {
+        document.getElementById('updated-at').innerHTML =
+          '<span class="error-msg">data.json 로드 실패 — fetch_data.py를 먼저 실행하세요</span>';
+        console.error(e);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
